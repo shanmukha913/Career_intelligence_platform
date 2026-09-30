@@ -1,0 +1,40 @@
+services:
+  api:
+    build: .
+    command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: &app_environment
+      APP_ENV: production
+      MEETING_API_KEY: ${MEETING_API_KEY:?Set MEETING_API_KEY in .env}
+      ALLOW_USER_REGISTRATION: ${ALLOW_USER_REGISTRATION:-true}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MEETING_LLM_MODEL: ${MEETING_LLM_MODEL:-gpt-4o-mini}
+      MEETING_DB_PATH: /data/meetings.db
+      ZOOM_ACCOUNT_ID: ${ZOOM_ACCOUNT_ID:-}
+      ZOOM_CLIENT_ID: ${ZOOM_CLIENT_ID:-}
+      ZOOM_CLIENT_SECRET: ${ZOOM_CLIENT_SECRET:-}
+      ZOOM_USER_ID: ${ZOOM_USER_ID:-me}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REFRESH_TOKEN: ${GOOGLE_REFRESH_TOKEN:-}
+      GOOGLE_MEET_RECORDINGS_FOLDER_ID: ${GOOGLE_MEET_RECORDINGS_FOLDER_ID:-}
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - meeting_data:/data
+    restart: unless-stopped
+
+  dashboard:
+    build: .
+    command: ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501", "--server.headless=true"]
+    environment:
+      <<: *app_environment
+    ports:
+      - "127.0.0.1:8501:8501"
+    volumes:
+      - meeting_data:/data
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  meeting_data:

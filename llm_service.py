@@ -200,7 +200,7 @@ def process_transcript(transcript: str, max_chars: int = 12000, retries: int = 2
     except ImportError:
         return _local_fallback(transcript)
 
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=api_key, timeout=30.0, max_retries=0)
     model = os.getenv("MEETING_LLM_MODEL", "gpt-4o-mini")
     chunks = [transcript[index:index + max_chars] for index in range(0, len(transcript), max_chars)]
     return _merge_results([_process_llm_chunk(client, chunk, model, retries) for chunk in chunks])

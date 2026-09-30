@@ -1,25 +1,58 @@
 """SQLite persistence for structured meeting intelligence."""
 
 import json
+import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-DB_PATH = Path("meetings.db")
+DB_PATH = Path(os.getenv("MEETING_DB_PATH", "meetings.db"))
 
 
 def init_db() -> None:
     connection = sqlite3.connect(DB_PATH)
     try:
         connection.execute(
+            """CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL UNIQUE,
+                password_hash BLOB NOT NULL,
+                password_salt BLOB NOT NULL,
+                created_at TEXT NOT NULL
+            )"""
+        )
+        connection.execute(
+            """CREATE TABLE IF NOT EXISTS auth_sessions (
+                token_hash BLOB PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            )"""
+        )
+        connection.execute(
             """CREATE TABLE IF NOT EXISTS meetings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 filename TEXT NOT NULL,
                 transcript TEXT NOT NULL,
                 intelligence_json TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                owner_id INTEGER,
+                source TEXT NOT NULL DEFAULT 'upload',
+                external_id TEXT,
+                FOREIGN KEY(owner_id) REFERENCES users(id)
             )"""
+        )
+        meeting_columns = {row[1] for row in connection.execute("PRAGMA table_info(meetings)")}
+        if "owner_id" not in meeting_columns:
+            connection.execute("ALTER TABLE meetings ADD COLUMN owner_id INTEGER")
+        if "source" not in meeting_columns:
+            connection.execute("ALTER TABLE meetings ADD COLUMN source TEXT NOT NULL DEFAULT 'upload'")
+        if "external_id" not in meeting_columns:
+            connection.execute("ALTER TABLE meetings ADD COLUMN external_id TEXT")
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_meetings_external_source "
+            "ON meetings(owner_id, source, external_id) WHERE external_id IS NOT NULL"
         )
         connection.execute(
             """CREATE TABLE IF NOT EXISTS participants (
@@ -59,13 +92,28 @@ def init_db() -> None:
         connection.close()
 
 
-def save_meeting(filename: str, transcript: str, intelligence: dict[str, Any]) -> int:
+def save_meeting(
+    filename: str,
+    transcript: str,
+    intelligence: dict[str, Any],
+    owner_id: int | None = None,
+    source: str = "upload",
+    external_id: str | None = None,
+) -> int:
     init_db()
     connection = sqlite3.connect(DB_PATH)
     try:
+        if external_id:
+            existing = connection.execute(
+                "SELECT id FROM meetings WHERE owner_id IS ? AND source = ? AND external_id = ?",
+                (owner_id, source, external_id),
+            ).fetchone()
+            if existing:
+                return int(existing[0])
         cursor = connection.execute(
-            "INSERT INTO meetings (filename, transcript, intelligence_json, created_at) VALUES (?, ?, ?, ?)",
-            (filename, transcript, json.dumps(intelligence), datetime.now().isoformat(timespec="seconds")),
+            "INSERT INTO meetings (filename, transcript, intelligence_json, created_at, owner_id, source, external_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (filename, transcript, json.dumps(intelligence), datetime.now().isoformat(timespec="seconds"), owner_id, source, external_id),
         )
         meeting_id = int(cursor.lastrowid)
         for participant in intelligence.get("participants", []):
@@ -89,17 +137,56 @@ def save_meeting(filename: str, transcript: str, intelligence: dict[str, Any]) -
         connection.close()
 
 
-def recent_meetings(limit: int = 10) -> list[dict[str, Any]]:
+def recent_meetings(limit: int = 10, owner_id: int | None = None) -> list[dict[str, Any]]:
     init_db()
     connection = sqlite3.connect(DB_PATH)
     try:
         connection.row_factory = sqlite3.Row
-        rows = connection.execute(
-            "SELECT id, filename, intelligence_json, created_at FROM meetings ORDER BY id DESC LIMIT ?", (limit,)
-        ).fetchall()
+        if owner_id is None:
+            rows = connection.execute(
+                "SELECT id, filename, intelligence_json, created_at FROM meetings ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                "SELECT id, filename, intelligence_json, created_at FROM meetings WHERE owner_id = ? ORDER BY id DESC LIMIT ?",
+                (owner_id, limit),
+            ).fetchall()
         return [
             {"id": row["id"], "filename": row["filename"], "created_at": row["created_at"], "intelligence": json.loads(row["intelligence_json"])}
             for row in rows
         ]
+    finally:
+        connection.close()
+
+
+def get_meeting(meeting_id: int, owner_id: int | None = None) -> dict[str, Any] | None:
+    """Retrieve one meeting and its structured intelligence by ID."""
+    init_db()
+    connection = sqlite3.connect(DB_PATH)
+    connection.row_factory = sqlite3.Row
+    try:
+        if owner_id is None:
+            row = connection.execute("SELECT * FROM meetings WHERE id = ?", (meeting_id,)).fetchone()
+        else:
+            row = connection.execute(
+                "SELECT * FROM meetings WHERE id = ? AND owner_id = ?", (meeting_id, owner_id)
+            ).fetchone()
+        if row is None:
+            return None
+        return {"id": row["id"], "filename": row["filename"], "transcript": row["transcript"], "created_at": row["created_at"], "intelligence": json.loads(row["intelligence_json"])}
+    finally:
+        connection.close()
+
+
+def get_external_meeting(owner_id: int, source: str, external_id: str) -> int | None:
+    """Return the local meeting ID for an already imported provider recording."""
+    init_db()
+    connection = sqlite3.connect(DB_PATH)
+    try:
+        row = connection.execute(
+            "SELECT id FROM meetings WHERE owner_id = ? AND source = ? AND external_id = ?",
+            (owner_id, source, external_id),
+        ).fetchone()
+        return int(row[0]) if row else None
     finally:
         connection.close()
