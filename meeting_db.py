@@ -3,7 +3,7 @@
 import json
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -157,6 +157,55 @@ def recent_meetings(limit: int = 10, owner_id: int | None = None) -> list[dict[s
         ]
     finally:
         connection.close()
+
+
+def meeting_analytics(owner_id: int) -> dict[str, Any]:
+    """Return meeting totals and eight-week activity for one account only."""
+    init_db()
+    connection = sqlite3.connect(DB_PATH)
+    try:
+        rows = connection.execute(
+            "SELECT transcript, intelligence_json, created_at FROM meetings WHERE owner_id = ?",
+            (owner_id,),
+        ).fetchall()
+    finally:
+        connection.close()
+
+    today = datetime.now().date()
+    current_week = today - timedelta(days=today.weekday())
+    weeks = [current_week - timedelta(weeks=offset) for offset in reversed(range(8))]
+    weekly_counts = {week.isoformat(): 0 for week in weeks}
+    total_words = 0
+    action_items = 0
+    deadlines = 0
+    participants = set()
+
+    for transcript, intelligence_json, created_at in rows:
+        total_words += len(transcript.split())
+        intelligence = json.loads(intelligence_json)
+        action_items += len(intelligence.get("action_items", []))
+        deadlines += len(intelligence.get("deadlines", []))
+        participants.update(
+            participant.get("name", "").strip().casefold()
+            for participant in intelligence.get("participants", [])
+            if participant.get("name", "").strip()
+        )
+        try:
+            meeting_date = datetime.fromisoformat(created_at).date()
+            meeting_week = meeting_date - timedelta(days=meeting_date.weekday())
+            if meeting_week.isoformat() in weekly_counts:
+                weekly_counts[meeting_week.isoformat()] += 1
+        except (TypeError, ValueError):
+            continue
+
+    return {
+        "meetings": len(rows),
+        "transcript_words": total_words,
+        "action_items": action_items,
+        "deadlines": deadlines,
+        "participants": len(participants),
+        "weekly_activity": weekly_counts,
+    }
 
 
 def get_meeting(meeting_id: int, owner_id: int | None = None) -> dict[str, Any] | None:

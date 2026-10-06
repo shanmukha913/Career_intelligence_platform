@@ -1,5 +1,6 @@
 """Import Zoom and Google Meet Drive recordings into the normal meeting pipeline."""
 
+import logging
 import os
 import re
 import tempfile
@@ -18,6 +19,7 @@ from meeting_db import get_external_meeting, get_meeting, save_meeting
 ALLOWED_RECORDING_EXTENSIONS = {"mp3", "wav", "m4a", "mp4", "webm", "ogg"}
 MAX_RECORDING_BYTES = 500 * 1024 * 1024
 REQUEST_TIMEOUT = (10, 60)
+logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=3)
@@ -97,7 +99,21 @@ def sync_google_meet_recordings(owner_id: int, model_name: str = "base") -> dict
         },
         timeout=REQUEST_TIMEOUT,
     )
-    token_response.raise_for_status()
+    try:
+        token_response.raise_for_status()
+    except requests.HTTPError as error:
+        try:
+            error_payload = token_response.json()
+        except ValueError:
+            error_payload = {}
+        if not isinstance(error_payload, dict):
+            error_payload = {}
+        error_code = error_payload.get("error")
+        error_description = error_payload.get("error_description")
+        details = ": ".join(str(value) for value in (error_code, error_description) if value)
+        if not details:
+            details = f"HTTP {token_response.status_code}"
+        raise RuntimeError(f"Google OAuth token exchange failed: {details}") from error
     headers = {"Authorization": f"Bearer {token_response.json()['access_token']}"}
     folder_id = _required_environment("GOOGLE_MEET_RECORDINGS_FOLDER_ID")
     query = "trashed = false and (mimeType contains 'audio/' or mimeType contains 'video/')"
@@ -189,7 +205,12 @@ def _import_one(
         upsert_meeting_embeddings(meeting_id, transcript, intelligence)
         return {"status": "imported", "meeting_id": meeting_id, "filename": filename}
     except Exception as error:
-        return {"status": "failed", "filename": filename, "error": str(error)}
+        logger.exception("Provider recording import failed: source=%s filename=%s", source, filename)
+        return {
+            "status": "failed",
+            "filename": filename,
+            "error": f"{type(error).__name__}: {error}",
+        }
     finally:
         if temporary_path and os.path.exists(temporary_path):
             os.unlink(temporary_path)

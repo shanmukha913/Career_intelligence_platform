@@ -1,3 +1,1126 @@
+# import streamlit as st
+# import whisper
+# import os
+# import json
+# import hashlib
+# from pathlib import Path
+# from datetime import datetime, timedelta
+# import tempfile
+# import csv
+# import io
+# from llm_service import process_transcript
+# from meeting_db import get_meeting, init_db, save_meeting, recent_meetings, meeting_analytics
+# from knowledge_repository import answer_question, index_existing_meetings, init_knowledge_db, semantic_search, upsert_meeting_embeddings
+# from meeting_reports import build_meeting_csv, build_meeting_pdf
+# import auth_service
+# from provider_integrations import sync_google_meet_recordings, sync_zoom_recordings
+
+# # Page Configuration
+# st.set_page_config(
+#     page_title="Meeting Transcriber",
+#     page_icon="🎙️",
+#     layout="wide"
+# )
+
+
+# def enforce_dashboard_access():
+#     """Require an individual account and retain a revocable Streamlit session."""
+#     auth_service.init_auth_db()
+#     token = st.session_state.get("auth_token")
+#     if token and (user_id := auth_service.resolve_session(token)) is not None:
+#         return user_id
+#     st.session_state.pop("auth_token", None)
+#     st.session_state.pop("authenticated_user_id", None)
+
+#     st.title("Meeting Intelligence Login")
+#     login_tab, register_tab = st.tabs(["Log in", "Create account"])
+#     with login_tab:
+#         with st.form("dashboard_login"):
+#             email = st.text_input("Email", key="login_email")
+#             password = st.text_input("Password", type="password", key="login_password")
+#             login_submitted = st.form_submit_button("Log in")
+#         if login_submitted:
+#             try:
+#                 session_token = auth_service.authenticate_user(email, password)
+#                 st.session_state["auth_token"] = session_token
+#                 st.session_state["authenticated_user_id"] = auth_service.resolve_session(session_token)
+#                 st.rerun()
+#             except ValueError as error:
+#                 st.error(str(error))
+#     if os.getenv("ALLOW_USER_REGISTRATION", "true").lower() == "true":
+#         with register_tab:
+#             with st.form("dashboard_registration"):
+#                 new_email = st.text_input("Email", key="register_email")
+#                 new_password = st.text_input("Password (12+ characters)", type="password", key="register_password")
+#                 register_submitted = st.form_submit_button("Create account")
+#             if register_submitted:
+#                 try:
+#                     auth_service.register_user(new_email, new_password)
+#                     session_token = auth_service.authenticate_user(new_email, new_password)
+#                     st.session_state["auth_token"] = session_token
+#                     st.session_state["authenticated_user_id"] = auth_service.resolve_session(session_token)
+#                     st.rerun()
+#                 except ValueError as error:
+#                     st.error(str(error))
+#     st.stop()
+
+
+# current_user_id = enforce_dashboard_access()
+
+# st.markdown(
+#     """
+#     <style>
+#         :root {
+#             --bg: #0f172a;
+#             --panel: rgba(15, 23, 42, 0.88);
+#             --panel-soft: rgba(15, 23, 42, 0.72);
+#             --surface: #111827;
+#             --surface-alt: #1f2937;
+#             --border: rgba(148, 163, 184, 0.2);
+#             --text: #e5eefb;
+#             --muted: #a6b5c8;
+#             --primary: #7dd3fc;
+#             --primary-strong: #38bdf8;
+#             --success: #34d399;
+#             --warning: #fbbf24;
+#         }
+
+#         .stApp {
+#             background: linear-gradient(135deg, #0f172a 0%, #111827 30%, #172554 100%);
+#             color: var(--text);
+#         }
+
+#         .main .block-container {
+#             padding-top: 2rem;
+#             padding-bottom: 2rem;
+#         }
+
+#         .resume-hero {
+#             background: rgba(15, 23, 42, 0.75);
+#             border: 1px solid var(--border);
+#             border-radius: 18px;
+#             padding: 1.4rem 1.6rem;
+#             margin-bottom: 1.2rem;
+#             box-shadow: 0 12px 32px rgba(15, 23, 42, 0.25);
+#         }
+
+#         .resume-kicker {
+#             color: var(--primary);
+#             font-size: 0.78rem;
+#             letter-spacing: 0.12em;
+#             text-transform: uppercase;
+#             font-weight: 700;
+#             margin-bottom: 0.45rem;
+#         }
+
+#         .resume-title {
+#             font-size: clamp(2.1rem, 4vw, 3.1rem);
+#             font-weight: 800;
+#             line-height: 1.1;
+#             margin: 0;
+#         }
+
+#         .resume-subtitle {
+#             color: var(--muted);
+#             font-size: 1.02rem;
+#             margin-top: 0.5rem;
+#             margin-bottom: 0;
+#         }
+
+#         .mini-badge {
+#             display: inline-block;
+#             padding: 0.38rem 0.7rem;
+#             border-radius: 999px;
+#             background: rgba(125, 211, 252, 0.12);
+#             border: 1px solid rgba(125, 211, 252, 0.35);
+#             color: var(--primary);
+#             font-size: 0.76rem;
+#             font-weight: 700;
+#             margin-right: 0.5rem;
+#             margin-top: 0.6rem;
+#         }
+
+#         .section-card {
+#             background: rgba(15, 23, 42, 0.82);
+#             border: 1px solid var(--border);
+#             border-radius: 16px;
+#             padding: 1rem 1.1rem;
+#             margin: 0.6rem 0 1rem 0;
+#         }
+
+#         .section-label {
+#             font-size: 1.1rem;
+#             font-weight: 700;
+#             margin-bottom: 0.5rem;
+#             color: var(--text);
+#         }
+
+#         .metric-box {
+#             background: linear-gradient(180deg, rgba(17, 24, 39, 0.9), rgba(17, 24, 39, 0.75));
+#             border: 1px solid var(--border);
+#             border-radius: 14px;
+#             padding: 0.9rem 0.8rem;
+#             min-height: 110px;
+#             display: flex;
+#             flex-direction: column;
+#             justify-content: center;
+#         }
+
+#         .stButton > button {
+#             border-radius: 12px;
+#             background: linear-gradient(135deg, #7dd3fc 0%, #38bdf8 100%);
+#             color: #082f49;
+#             border: none;
+#             font-weight: 700;
+#             padding: 0.65rem 1rem;
+#             transition: transform 0.15s ease;
+#         }
+
+#         .stButton > button:hover {
+#             transform: translateY(-1px);
+#             box-shadow: 0 10px 18px rgba(56, 189, 248, 0.25);
+#         }
+
+#         .stTabs [role="tablist"] {
+#             gap: 0.5rem;
+#         }
+
+#         .stTabs [role="tab"] {
+#             border-radius: 10px 10px 0 0;
+#             background: rgba(15, 23, 42, 0.5);
+#             border: 1px solid var(--border);
+#             color: var(--muted);
+#             padding: 0.5rem 1rem;
+#         }
+
+#         .stTabs [role="tab"][aria-selected="true"] {
+#             background: rgba(56, 189, 248, 0.12);
+#             border-color: rgba(56, 189, 248, 0.5);
+#             color: var(--primary);
+#         }
+
+#         .stDataFrame {
+#             background: rgba(15, 23, 42, 0.65);
+#             border-radius: 12px;
+#         }
+#     </style>
+#     """,
+#     unsafe_allow_html=True,
+# )
+
+# st.markdown(
+#     """
+#     <style>
+#         :root {
+#             --bg: #f3f6f4;
+#             --panel: #ffffff;
+#             --surface: #ffffff;
+#             --surface-alt: #edf2ef;
+#             --border: #d9e2dd;
+#             --text: #24352e;
+#             --muted: #64756d;
+#             --primary: #176b57;
+#             --primary-strong: #105442;
+#             --success: #247454;
+#             --warning: #9a6712;
+#         }
+
+#         .stApp { background: var(--bg); color: var(--text); }
+#         .main .block-container { max-width: 1320px; padding-top: 1.25rem; padding-bottom: 2.5rem; }
+#         [data-testid="stSidebar"] { background: var(--panel); border-right: 1px solid var(--border); }
+#         .resume-hero { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: none; padding: 0.8rem 1.1rem; margin-bottom: 0.8rem; }
+#         .resume-kicker { color: var(--primary); letter-spacing: 0; text-transform: none; font-size: 0.82rem; margin-bottom: 0.25rem; }
+#         .resume-title { color: var(--text); font-size: 1.65rem !important; line-height: 1.2; margin: 0; }
+#         .resume-subtitle { color: var(--muted); font-size: 0.9rem; margin-top: 0.35rem; }
+#         .mini-badge { border-radius: 4px; background: var(--surface-alt); border: 1px solid var(--border); color: var(--primary); }
+#         .section-card, .metric-box { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: none; }
+#         .metric-box { min-height: 98px; }
+#         .stButton > button { border-radius: 6px; background: var(--primary); color: #fff; border: 1px solid var(--primary); box-shadow: none; transition: background 0.15s ease; }
+#         .stButton > button:hover { background: var(--primary-strong); border-color: var(--primary-strong); color: #fff; transform: none; box-shadow: none; }
+#         .stTabs [role="tablist"] { gap: 0.25rem; border-bottom: 1px solid var(--border); }
+#         .stTabs [role="tab"] { border-radius: 6px 6px 0 0; background: transparent; border: 0; color: var(--muted); }
+#         .stTabs [role="tab"][aria-selected="true"] { background: var(--panel); color: var(--primary); border-bottom: 2px solid var(--primary); }
+#         .stDataFrame { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+#         .dashboard-brand { color: var(--text); font-size: 1.05rem; font-weight: 750; padding: 0.45rem 0; }
+#         .dashboard-navigation [data-testid="stSegmentedControl"] { justify-content: flex-end; }
+#         .dashboard-navigation button[aria-pressed="true"] { background: #e1eee8 !important; color: var(--primary) !important; border-color: #b7d2c5 !important; }
+#         .dashboard-navigation [role="radio"][aria-checked="true"] { background: #e1eee8 !important; color: var(--primary) !important; border-color: #b7d2c5 !important; box-shadow: none !important; }
+#         button[data-variant="segmented_control"] { border-color: var(--border) !important; color: var(--text) !important; }
+#         button[data-variant="segmented_control"][aria-checked="true"] { background: #e1eee8 !important; color: var(--primary) !important; border-color: #b7d2c5 !important; box-shadow: none !important; }
+#         .dashboard-kicker { color: var(--muted); font-size: 0.82rem; margin-top: -0.25rem; }
+#         .dashboard-heading { color: var(--text); font-size: 1.55rem; font-weight: 700; margin: 0.3rem 0; }
+#         .dashboard-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.1rem; margin: 0.5rem 0 1rem; }
+#         .dashboard-panel-title { color: var(--text); font-size: 1rem; font-weight: 700; margin-bottom: 0.3rem; }
+#         @media (max-width: 700px) { .main .block-container { padding-left: 1rem; padding-right: 1rem; } }
+#     </style>
+#     """,
+#     unsafe_allow_html=True,
+# )
+
+# st.markdown(
+#     """
+#     <div class="resume-hero">
+#         <div class="resume-kicker">CAREER INTELLIGENCE</div>
+#         <h1 class="resume-title">Meeting intelligence</h1>
+#         <p class="resume-subtitle">Transcripts, decisions, actions, and deadlines in one private workspace.</p>
+#     </div>
+#     """,
+#     unsafe_allow_html=True,
+# )
+
+# # Create necessary directories
+# os.makedirs("uploads", exist_ok=True)
+# os.makedirs("transcripts", exist_ok=True)
+# os.makedirs("cache", exist_ok=True)
+# init_db()
+# init_knowledge_db()
+# index_existing_meetings()
+
+# st.session_state.setdefault("dashboard_view", "home")
+# navigation_labels = {"home": "🏠 Home", "workspace": "▦ Workspace", "profile": "👤 Profile"}
+# navigation_views = {label: view for view, label in navigation_labels.items()}
+# navigation_options = list(navigation_views)
+# navigation_index = list(navigation_labels).index(st.session_state["dashboard_view"])
+# st.markdown('<div class="dashboard-navigation">', unsafe_allow_html=True)
+# if hasattr(st, "segmented_control"):
+#     selected_navigation = st.segmented_control(
+#         "Dashboard section",
+#         navigation_options,
+#         default=navigation_options[navigation_index],
+#         label_visibility="collapsed",
+#         key="dashboard_navigation",
+#         width="content",
+#     )
+# else:
+#     selected_navigation = st.radio(
+#         "Dashboard section",
+#         navigation_options,
+#         index=navigation_index,
+#         horizontal=True,
+#         label_visibility="collapsed",
+#         key="dashboard_navigation",
+#     )
+# st.markdown("</div>", unsafe_allow_html=True)
+# dashboard_view = navigation_views.get(selected_navigation, "home")
+# st.session_state["dashboard_view"] = dashboard_view
+
+# if dashboard_view == "home":
+#     analytics = meeting_analytics(current_user_id)
+#     account_email = auth_service.user_email(current_user_id) or "Account"
+#     st.markdown('<div class="dashboard-heading">Overview</div>', unsafe_allow_html=True)
+#     st.markdown(f'<div class="dashboard-kicker">Your private meeting workspace · {account_email}</div>', unsafe_allow_html=True)
+
+#     metric_columns = st.columns(4)
+#     metric_columns[0].metric("Meetings", analytics["meetings"])
+#     metric_columns[1].metric("Action items", analytics["action_items"])
+#     metric_columns[2].metric("Deadlines", analytics["deadlines"])
+#     metric_columns[3].metric("People identified", analytics["participants"])
+
+#     words_col, trend_col = st.columns([1, 2.2])
+#     with words_col:
+#         st.metric("Transcript words", f"{analytics['transcript_words']:,}")
+#         st.caption("Across your saved meetings")
+#     with trend_col:
+#         st.markdown('<div class="dashboard-panel-title">Meetings · last 8 weeks</div>', unsafe_allow_html=True)
+#         if analytics["meetings"]:
+#             weekly_activity = analytics["weekly_activity"]
+#             st.bar_chart(
+#                 {"Week": list(weekly_activity), "Meetings": list(weekly_activity.values())},
+#                 x="Week",
+#                 y="Meetings",
+#                 height=205,
+#                 color="#176b57",
+#             )
+#         else:
+#             st.info("Meeting activity will appear here after your first recording is processed.")
+
+#     st.markdown('<div class="dashboard-panel-title">Recent meetings</div>', unsafe_allow_html=True)
+#     latest_meetings = recent_meetings(limit=5, owner_id=current_user_id)
+#     if latest_meetings:
+#         for meeting in latest_meetings:
+#             meeting_col, summary_col, date_col = st.columns([1.2, 2.3, 1.2])
+#             with meeting_col:
+#                 st.write(meeting["filename"])
+#             with summary_col:
+#                 st.caption(meeting["intelligence"].get("summary", "No summary available."))
+#             with date_col:
+#                 st.caption(meeting["created_at"])
+#             st.divider()
+#     else:
+#         st.info("No meetings yet. Open Workspace to upload a recording or sync a provider.")
+
+#     st.stop()
+
+# if dashboard_view == "profile":
+#     account_email = auth_service.user_email(current_user_id) or "Unknown account"
+#     st.markdown('<div class="dashboard-heading">Profile</div>', unsafe_allow_html=True)
+#     st.markdown('<div class="dashboard-kicker">Account and session</div>', unsafe_allow_html=True)
+#     with st.container():
+#         st.markdown('<div class="dashboard-panel-title">Signed-in account</div>', unsafe_allow_html=True)
+#         st.write(account_email)
+#         st.caption("Meeting records, searches, and provider imports are scoped to this account.")
+#     if st.button("Log out", key="profile_logout"):
+#         auth_token = st.session_state.get("auth_token")
+#         auth_service.revoke_session(auth_token)
+#         st.session_state.clear()
+#         st.rerun()
+#     st.stop()
+
+# st.markdown('<div class="dashboard-heading">Workspace</div>', unsafe_allow_html=True)
+# st.markdown('<div class="dashboard-kicker">Upload, search, review, and sync meeting recordings.</div>', unsafe_allow_html=True)
+
+# # ==================== CACHING SYSTEM (Avoid Re-transcription) ====================
+# def get_file_hash(file_bytes):
+#     """Generate hash of file for caching"""
+#     return hashlib.md5(file_bytes).hexdigest()
+
+# def get_cached_transcript(file_hash):
+#     """Check if transcript already exists"""
+#     cache_file = os.path.join("cache", f"{file_hash}.json")
+#     if os.path.exists(cache_file):
+#         with open(cache_file, 'r', encoding='utf-8') as f:
+#             return json.load(f)
+#     return None
+
+# def save_to_cache(file_hash, result):
+#     """Save transcription result to cache"""
+#     cache_file = os.path.join("cache", f"{file_hash}.json")
+#     with open(cache_file, 'w', encoding='utf-8') as f:
+#         json.dump(result, f)
+
+# # ==================== TASK 2: FILE UPLOAD VALIDATION ====================
+# def validate_file(uploaded_file):
+#     """
+#     Validate uploaded file
+#     - Check file size (max 500MB)
+#     - Check file format
+#     - Check if file is not empty
+#     """
+#     allowed_formats = ["mp3", "wav", "m4a", "mp4", "webm", "m4b", "ogg"]
+    
+#     if uploaded_file is None:
+#         return False, "No file selected"
+    
+#     # Check file size (500MB limit)
+#     file_size = uploaded_file.size / (1024 * 1024)  # Convert to MB
+#     if file_size > 500:
+#         return False, f"File size ({file_size:.2f}MB) exceeds 500MB limit"
+    
+#     # Check file format
+#     file_extension = uploaded_file.name.split('.')[-1].lower()
+#     if file_extension not in allowed_formats:
+#         return False, f"Format '.{file_extension}' not supported. Allowed: {', '.join(allowed_formats)}"
+    
+#     # Check if file is empty
+#     if file_size == 0:
+#         return False, "File is empty"
+    
+#     return True, "File validation passed"
+
+
+# # ==================== TASK 1 & 3: WHISPER TRANSCRIPTION & SAVING ====================
+# @st.cache_resource
+# def load_whisper_model(model_name="base"):
+#     """Load Whisper model (cached to avoid reloading)"""
+#     return whisper.load_model(model_name)
+
+
+# def transcribe_audio(file_path, model):
+#     """
+#     Transcribe audio using Whisper and always return a dictionary-like result.
+#     """
+#     try:
+#         result = model.transcribe(file_path)
+#         if isinstance(result, dict):
+#             return result
+#         return {"text": ""}
+#     except Exception as e:
+#         return {"text": "", "error": f"Transcription error: {str(e)}"}
+
+
+# def save_transcript(transcript_text, filename, owner_id=None):
+#     """
+#     Save transcript to file
+#     Returns: (success, filepath)
+#     """
+#     try:
+#         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+#         base_name = Path(filename).stem
+#         transcript_filename = f"{base_name}_{timestamp}.txt"
+#         transcript_directory = os.path.join("transcripts", f"user_{owner_id}") if owner_id is not None else "transcripts"
+#         os.makedirs(transcript_directory, exist_ok=True)
+#         transcript_path = os.path.join(transcript_directory, transcript_filename)
+        
+#         with open(transcript_path, 'w', encoding='utf-8') as f:
+#             f.write(transcript_text)
+        
+#         # Also save metadata
+#         metadata = {
+#             "original_file": filename,
+#             "timestamp": timestamp,
+#             "transcription_date": datetime.now().isoformat(),
+#             "transcript_length": len(transcript_text),
+#             "word_count": len(transcript_text.split())
+#         }
+        
+#         metadata_path = transcript_path.replace('.txt', '_metadata.json')
+#         with open(metadata_path, 'w', encoding='utf-8') as f:
+#             json.dump(metadata, f, indent=2)
+        
+#         return True, transcript_path, metadata
+#     except Exception as e:
+#         return False, None, str(e)
+
+
+# def validate_transcript(transcript_result):
+#     """
+#     Validate transcript
+#     - Check if not empty
+#     - Check if transcription was successful
+#     """
+#     validation_result = {
+#         "is_valid": True,
+#         "issues": []
+#     }
+    
+#     if not transcript_result or "text" not in transcript_result:
+#         validation_result["is_valid"] = False
+#         validation_result["issues"].append("No text in transcript")
+#         return validation_result
+    
+#     text = transcript_result["text"].strip()
+    
+#     if not text:
+#         validation_result["is_valid"] = False
+#         validation_result["issues"].append("Transcript is empty")
+    
+#     if len(text) < 10:
+#         validation_result["is_valid"] = False
+#         validation_result["issues"].append("Transcript is too short (less than 10 characters)")
+    
+#     return validation_result
+
+
+# def build_csv_export(transcript_text, intelligence):
+#     """Build one CSV report from the structured meeting intelligence."""
+
+#     rows = [
+#         ["Section", "Content"],
+#         ["Transcript", transcript_text],
+#         ["Summary", intelligence["summary"]],
+#         ["Key Points", "; ".join(intelligence["key_points"])],
+#         ["Decisions", "; ".join(intelligence["decisions"])],
+#         ["Action Items", json.dumps(intelligence["action_items"])],
+#         ["Participants", json.dumps(intelligence["participants"])],
+#         ["Deadlines", json.dumps(intelligence["deadlines"])],
+#         ["Priorities", "; ".join(intelligence["priorities"])],
+#         ["Meeting Points", "; ".join(intelligence["meeting_points"])],
+#     ]
+
+#     output = io.StringIO()
+#     writer = csv.writer(output)
+#     writer.writerows(rows)
+#     return output.getvalue()
+
+
+# # ==================== TASK 4: STREAMLIT INTERFACE ====================
+# st.markdown('<div class="section-card">', unsafe_allow_html=True)
+# col1, col2 = st.columns([2.3, 1])
+
+# with col1:
+#     st.markdown('<div class="section-label">📤 Upload Audio File</div>', unsafe_allow_html=True)
+#     uploaded_file = st.file_uploader(
+#         "Select a meeting recording",
+#         type=["mp3", "wav", "m4a", "mp4", "webm", "m4b", "ogg"],
+#         help="Maximum file size: 500MB. No need to manually save - upload directly!",
+#         label_visibility="collapsed",
+#     )
+
+# with col2:
+#     st.markdown('<div class="section-label">⚙️ Settings</div>', unsafe_allow_html=True)
+#     model_name = st.selectbox(
+#         "Whisper Model",
+#         ["tiny", "base", "small"],
+#         index=0,
+#         help="tiny: fastest preview | base: balanced accuracy | small: slower, better accuracy"
+#     )
+#     model_info = {
+#         "tiny": "⚡ Fastest | best for quick demos and short recordings",
+#         "base": "🚀 Fast | ~85-90% accuracy | ~5-10 sec/min",
+#         "small": "⚡ Medium | ~90-95% accuracy | ~15-20 sec/min"
+#     }
+#     st.caption(model_info[model_name])
+
+# st.markdown('</div>', unsafe_allow_html=True)
+
+# # Main Processing Section
+# if "transcript_result" not in st.session_state:
+#     st.session_state["transcript_result"] = None
+
+# transcript_result = st.session_state.get("transcript_result")
+
+# if uploaded_file is not None:
+#     # Validate file
+#     is_valid, validation_message = validate_file(uploaded_file)
+    
+#     if not is_valid:
+#         st.error(f"❌ {validation_message}")
+#     else:
+#         st.success(f"✅ File uploaded: {uploaded_file.name} ({uploaded_file.size / (1024*1024):.2f}MB)")
+        
+#         # Get file hash for caching
+#         file_bytes = uploaded_file.getbuffer()
+#         file_hash = get_file_hash(str(current_user_id).encode("utf-8") + bytes(file_bytes))
+        
+#         # Check if already transcribed
+#         cached_result = get_cached_transcript(file_hash)
+        
+#         if cached_result:
+#             st.info("💾 This file was already transcribed! Using cached result (instant).")
+        
+#         # Create two tabs for transcription and results
+#         tab1, tab2, tab3, tab4 = st.tabs(["Transcribe", "View Transcripts", "Verify Accuracy", "AI Search"])
+        
+#         with tab1:
+#             col1, col2 = st.columns([3, 1])
+#             with col2:
+#                 transcribe_button = st.button("🎙️ Transcribe", use_container_width=True)
+            
+#             if transcribe_button:
+#                 # Check cache first
+#                 if cached_result:
+#                     transcript_result = cached_result
+#                     if isinstance(transcript_result, dict) and "text" in transcript_result:
+#                         st.session_state["transcript_result"] = transcript_result
+#                         try:
+#                             meeting_intelligence = process_transcript(transcript_result["text"])
+#                             st.session_state["meeting_intelligence"] = meeting_intelligence
+#                             st.session_state["meeting_id"] = save_meeting(
+#                                 uploaded_file.name,
+#                                 transcript_result["text"],
+#                                 meeting_intelligence,
+#                                 owner_id=current_user_id,
+#                             )
+#                             upsert_meeting_embeddings(
+#                                 st.session_state["meeting_id"],
+#                                 transcript_result["text"],
+#                                 meeting_intelligence,
+#                             )
+#                         except Exception as intelligence_error:
+#                             st.warning(f"⚠️ Meeting intelligence was not saved: {intelligence_error}")
+#                         status_text = st.empty()
+#                         status_text.success("✅ Used cached transcription (instant)!")
+#                     else:
+#                         st.warning("⚠️ Cached result was invalid. Re-transcribing the file...")
+#                         cached_result = None
+#                 else:
+#                     # Create progress bar and status area
+#                     progress_bar = st.progress(0)
+#                     status_text = st.empty()
+#                     transcript_display = st.empty()
+                    
+#                     try:
+#                         # Step 1: Save uploaded file
+#                         status_text.info("📝 Step 1/5: Saving audio file...")
+#                         progress_bar.progress(20)
+                        
+#                         with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as tmp_file:
+#                             tmp_file.write(file_bytes)
+#                             temp_path = tmp_file.name
+                        
+#                         # Step 2: Load Whisper model
+#                         status_text.info(f"🤖 Step 2/5: Loading {model_name} Whisper model...")
+#                         progress_bar.progress(40)
+#                         model = load_whisper_model(model_name)
+                        
+#                         # Step 3: Transcribe audio
+#                         status_text.info("🔄 Step 3/5: Processing audio and generating transcript...")
+#                         progress_bar.progress(60)
+#                         transcript_result = transcribe_audio(temp_path, model)
+
+#                         if isinstance(transcript_result, dict) and "error" in transcript_result:
+#                             st.error(f"❌ {transcript_result['error']}")
+#                             os.unlink(temp_path)
+#                             raise RuntimeError(transcript_result["error"])
+
+#                         if not isinstance(transcript_result, dict) or "text" not in transcript_result:
+#                             st.error("❌ Transcription returned an invalid result format. Please try a different audio/video file.")
+#                             os.unlink(temp_path)
+#                             raise TypeError("Invalid transcription result format")
+                        
+#                         # Save to cache
+#                         save_to_cache(file_hash, transcript_result)
+                        
+#                         # Step 4: Validate transcript
+#                         status_text.info("✔️ Step 4/5: Validating transcript...")
+#                         progress_bar.progress(80)
+#                         validation = validate_transcript(transcript_result)
+                        
+#                         if not validation["is_valid"]:
+#                             st.error(f"❌ Transcript validation failed: {', '.join(validation['issues'])}")
+#                         else:
+#                             # Step 5: Save transcript
+#                             status_text.info("💾 Step 5/5: Saving transcript...")
+#                             progress_bar.progress(95)
+                            
+#                             transcript_text = transcript_result["text"]
+#                             success, filepath, metadata = save_transcript(transcript_text, uploaded_file.name, current_user_id)
+                            
+#                             if success:
+#                                 progress_bar.progress(100)
+#                                 status_text.success("✅ Transcription completed successfully!")
+#                                 try:
+#                                     meeting_intelligence = process_transcript(transcript_text)
+#                                     meeting_id = save_meeting(
+#                                         uploaded_file.name,
+#                                         transcript_text,
+#                                         meeting_intelligence,
+#                                         owner_id=current_user_id,
+#                                     )
+#                                     st.session_state["meeting_intelligence"] = meeting_intelligence
+#                                     st.session_state["meeting_id"] = meeting_id
+#                                     upsert_meeting_embeddings(meeting_id, transcript_text, meeting_intelligence)
+#                                 except Exception as intelligence_error:
+#                                     st.warning(f"⚠️ Meeting intelligence was not saved: {intelligence_error}")
+#                                 st.session_state["transcript_result"] = transcript_result
+#                             else:
+#                                 st.error(f"❌ Failed to save transcript: {metadata}")
+                        
+#                         # Cleanup temp file
+#                         os.unlink(temp_path)
+                        
+#                     except Exception as e:
+#                         st.error(f"❌ Error during transcription: {str(e)}")
+#                         if os.path.exists(temp_path):
+#                             os.unlink(temp_path)
+                
+#                 # Display results
+#                 if transcript_result:
+#                     st.markdown("<div class='section-card'>", unsafe_allow_html=True)
+#                     st.subheader("📄 Transcript Result")
+#                     transcript_text = transcript_result["text"]
+
+#                     st.text_area(
+#                         "Transcript:",
+#                         value=transcript_text,
+#                         height=300,
+#                         disabled=True,
+#                     )
+
+#                     col1, col2, col3, col4 = st.columns(4)
+#                     word_count = len(transcript_text.split())
+#                     char_count = len(transcript_text)
+
+#                     with col1:
+#                         st.markdown("<div class='metric-box'><div style='color: #94a3b8; font-size: 0.77rem;'>Word Count</div><div style='font-size: 2rem; font-weight: 800; margin-top: 0.3rem;'>%s</div></div>" % word_count, unsafe_allow_html=True)
+#                     with col2:
+#                         st.markdown("<div class='metric-box'><div style='color: #94a3b8; font-size: 0.77rem;'>Characters</div><div style='font-size: 2rem; font-weight: 800; margin-top: 0.3rem;'>%s</div></div>" % char_count, unsafe_allow_html=True)
+#                     with col3:
+#                         st.markdown("<div class='metric-box'><div style='color: #94a3b8; font-size: 0.77rem;'>Model</div><div style='font-size: 1.3rem; font-weight: 800; margin-top: 0.3rem;'>%s</div></div>" % model_name, unsafe_allow_html=True)
+#                     with col4:
+#                         if model_name == "base":
+#                             accuracy = "85-90%"
+#                         else:
+#                             accuracy = "90-95%"
+#                         st.markdown("<div class='metric-box'><div style='color: #94a3b8; font-size: 0.77rem;'>Est. Accuracy</div><div style='font-size: 1.8rem; font-weight: 800; margin-top: 0.3rem;'>%s</div></div>" % accuracy, unsafe_allow_html=True)
+
+#                     intelligence = st.session_state.get("meeting_intelligence") or process_transcript(transcript_text)
+#                     st.session_state["meeting_intelligence"] = intelligence
+#                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+#                     col_download1, col_download2 = st.columns(2)
+#                     with col_download1:
+#                         st.download_button(
+#                             label="📥 Download Transcript (PDF)",
+#                             data=build_meeting_pdf({
+#                                 "filename": f"transcript_{timestamp}.txt",
+#                                 "created_at": timestamp,
+#                                 "transcript": transcript_text,
+#                                 "intelligence": intelligence,
+#                             }),
+#                             file_name=f"transcript_{timestamp}.pdf",
+#                             mime="application/pdf",
+#                             use_container_width=True,
+#                         )
+#                     with col_download2:
+#                         st.download_button(
+#                             label="📊 Download Summary (CSV)",
+#                             data=build_csv_export(transcript_text, intelligence),
+#                             file_name=f"meeting_summary_{timestamp}.csv",
+#                             mime="text/csv",
+#                             use_container_width=True,
+#                         )
+#                     st.markdown("</div>", unsafe_allow_html=True)
+
+#                     st.markdown("---")
+#                     st.markdown("## 🧠 Structured Meeting Intelligence")
+#                     st.caption("LLM-powered when OPENAI_API_KEY is configured; otherwise the app uses a deterministic local fallback.")
+#                     st.markdown(f"### Summary\n{intelligence['summary']}")
+
+#                     insight_col1, insight_col2 = st.columns(2)
+#                     with insight_col1:
+#                         st.markdown("#### Key Points")
+#                         for item in intelligence["key_points"] or ["No key points extracted."]:
+#                             st.markdown(f"- {item}")
+#                         st.markdown("#### Decisions")
+#                         for item in intelligence["decisions"] or ["No decisions extracted."]:
+#                             st.markdown(f"- {item}")
+#                         st.markdown("#### Priorities")
+#                         for item in intelligence["priorities"] or ["No priorities extracted."]:
+#                             st.markdown(f"- {item}")
+#                         st.markdown("#### Meeting Points")
+#                         for item in intelligence["meeting_points"] or ["No meeting point extracted."]:
+#                             st.markdown(f"- {item}")
+
+#                         if intelligence["action_items"]:
+#                             st.dataframe(intelligence["action_items"], use_container_width=True, hide_index=True)
+#                         else:
+#                             st.info("No action items extracted.")
+#                         st.markdown("#### Participants & Responsibilities")
+#                         if intelligence["participants"]:
+#                             st.dataframe(intelligence["participants"], use_container_width=True, hide_index=True)
+#                         else:
+#                             st.info("No participants identified.")
+
+#                         st.markdown("#### Deadlines")
+#                         if intelligence["deadlines"]:
+#                             st.dataframe(intelligence["deadlines"], use_container_width=True, hide_index=True)
+#                         else:
+#                             st.info("No deadlines extracted.")
+
+        
+#         with tab2:
+#             st.subheader("📋 Saved Transcripts")
+
+#             stored_meetings = recent_meetings(owner_id=current_user_id)
+#             if stored_meetings:
+#                 st.caption("Structured records saved in the local database")
+#                 for meeting in stored_meetings:
+#                     intelligence = meeting["intelligence"]
+#                     with st.expander(f"{meeting['filename']} · {meeting['created_at']}"):
+#                         st.markdown(f"**Summary**  \n{intelligence['summary']}")
+#                         if intelligence["action_items"]:
+#                             st.markdown("**Action items**")
+#                             st.dataframe(intelligence["action_items"], use_container_width=True, hide_index=True)
+#             else:
+#                 st.info("No structured meeting records saved yet.")
+
+#             transcript_directory = Path("transcripts") / f"user_{current_user_id}" if current_user_id is not None else Path("transcripts")
+#             transcript_files = list(transcript_directory.glob("*_metadata.json"))
+#             st.markdown("### Transcript files")
+#             if transcript_files:
+#                 for metadata_file in sorted(transcript_files, reverse=True):
+#                     with open(metadata_file, 'r') as f:
+#                         metadata = json.load(f)
+                    
+#                     col1, col2, col3 = st.columns([2, 1, 1])
+#                     with col1:
+#                         st.write(f"📄 {metadata['original_file']}")
+#                     with col2:
+#                         st.write(f"Words: {metadata['word_count']}")
+#                     with col3:
+#                         transcript_file = str(metadata_file).replace('_metadata.json', '.txt')
+#                         if os.path.exists(transcript_file):
+#                             with open(transcript_file, 'r') as f:
+#                                 transcript_text = f.read()
+#                             st.download_button(
+#                                 "📥 Download PDF",
+#                                 data=build_meeting_pdf({
+#                                     "filename": metadata.get("original_file", os.path.basename(transcript_file)),
+#                                     "created_at": metadata.get("transcription_date", ""),
+#                                     "transcript": transcript_text,
+#                                 }),
+#                                 file_name=f"{Path(transcript_file).stem}.pdf",
+#                                 mime="application/pdf",
+#                                 key=str(metadata_file)
+#                             )
+#             else:
+#                 st.info("No transcript files saved yet.")
+        
+#         with tab3:
+#             st.subheader("✔️ Verify Accuracy")
+#             st.write("""
+#             How to use this feature:
+#             1. First transcribe a file.
+#             2. Go to this tab.
+#             3. Paste the real/reference text spoken in the audio.
+#             4. Click 'Compare & Calculate Accuracy'.
+#             5. The app shows Accuracy %, Word Error Rate, and a side-by-side comparison.
+#             """)
+            
+#             reference_text = st.text_area(
+#                 "Paste the reference/expected transcript text:",
+#                 height=200,
+#                 placeholder="Paste what the audio actually says..."
+#             )
+            
+#             transcript_result = st.session_state.get("transcript_result")
+
+#             if reference_text and st.button("🔍 Compare & Calculate Accuracy"):
+#                 if transcript_result is not None:
+#                     transcript_text = transcript_result.get("text", "")
+                    
+#                     # Calculate metrics
+#                     ref_words = reference_text.lower().split()
+#                     hyp_words = transcript_text.lower().split()
+                    
+#                     from difflib import SequenceMatcher
+#                     matcher = SequenceMatcher(None, ref_words, hyp_words)
+#                     matches = sum(block.size for block in matcher.get_matching_blocks())
+#                     errors = len(ref_words) - matches
+                    
+#                     if len(ref_words) == 0:
+#                         wer = 0 if len(hyp_words) == 0 else 100
+#                     else:
+#                         wer = (errors / len(ref_words)) * 100
+                    
+#                     accuracy = 100 - wer
+                    
+#                     # Display results
+#                     col1, col2, col3, col4 = st.columns(4)
+#                     with col1:
+#                         st.metric("Accuracy", f"{accuracy:.1f}%", 
+#                                  delta="✅ Good" if accuracy >= 90 else "⚠️ Fair" if accuracy >= 75 else "❌ Poor")
+#                     with col2:
+#                         st.metric("Word Error Rate", f"{wer:.1f}%")
+#                     with col3:
+#                         st.metric("Reference Words", len(ref_words))
+#                     with col4:
+#                         st.metric("Transcribed Words", len(hyp_words))
+                    
+#                     # Show comparison
+#                     st.write("---")
+#                     col1, col2 = st.columns(2)
+#                     with col1:
+#                         st.write("**Reference Text:**")
+#                         st.text(reference_text[:500])
+#                     with col2:
+#                         st.write("**Transcribed Text:**")
+#                         st.text(transcript_text[:500])
+#                 else:
+#                     st.warning("Please transcribe audio first!")
+
+#         with tab4:
+#             st.subheader("🔎 Search Historical Meetings")
+#             st.caption("Search saved meeting information using natural-language queries.")
+#             search_query = st.text_input(
+#                 "Search query",
+#                 placeholder="Which meeting discussed the database migration?",
+#             )
+#             if search_query:
+#                 results = semantic_search(search_query, owner_id=current_user_id)
+#                 if results:
+#                     for result in results:
+#                         st.markdown(
+#                             f"**Meeting #{result['meeting_id']}: {result['filename']}** · "
+#                             f"{result['created_at']} · {result['section_type']} · "
+#                             f"relevance {result['score']:.2f}"
+#                         )
+#                         st.write(result["content"])
+#                 else:
+#                     st.info("No matching meeting information found.")
+
+#             question = st.text_input(
+#                 "Ask about your meetings",
+#                 placeholder="What deadline was decided for the mobile application?",
+#                 key="rag_question",
+#             )
+#             if question and st.button("💬 Answer from meetings"):
+#                 rag_result = answer_question(question, owner_id=current_user_id)
+#                 st.markdown("### Grounded answer")
+#                 st.write(rag_result["answer"])
+#                 st.caption("Sources used")
+#                 for source in rag_result["sources"]:
+#                     st.caption(
+#                         f"Meeting #{source['meeting_id']}: {source['filename']} · "
+#                         f"{source['created_at']} · {source['section_type']} · "
+#                         f"relevance {source['score']:.2f}"
+#                     )
+
+
+# st.divider()
+# st.header("Meeting Library")
+# st.caption("Browse stored meetings, inspect the full record, and export a report for the selected meeting.")
+
+# library_meetings = recent_meetings(limit=100, owner_id=current_user_id)
+# if not library_meetings:
+#     st.info("No meetings have been saved yet.")
+# else:
+#     filter_col, participant_col, period_col = st.columns([2, 1, 1])
+#     with filter_col:
+#         library_query = st.text_input("Filter meetings", placeholder="Filename or meeting topic")
+#     participant_names = sorted({
+#         participant.get("name", "Unknown")
+#         for meeting in library_meetings
+#         for participant in meeting["intelligence"].get("participants", [])
+#         if participant.get("name")
+#     })
+#     with participant_col:
+#         participant_filter = st.selectbox("Participant", ["All participants", *participant_names])
+#     with period_col:
+#         period_filter = st.selectbox("Date range", ["Any time", "Last 7 days", "Last 30 days"])
+
+#     cutoff = None
+#     if period_filter == "Last 7 days":
+#         cutoff = datetime.now() - timedelta(days=7)
+#     elif period_filter == "Last 30 days":
+#         cutoff = datetime.now() - timedelta(days=30)
+
+#     filtered_meetings = []
+#     for item in library_meetings:
+#         intelligence = item["intelligence"]
+#         searchable = f"{item['filename']} {intelligence.get('summary', '')}".lower()
+#         if library_query and library_query.lower() not in searchable:
+#             continue
+#         if participant_filter != "All participants" and participant_filter not in {
+#             person.get("name") for person in intelligence.get("participants", [])
+#         }:
+#             continue
+#         if cutoff:
+#             try:
+#                 meeting_date = datetime.fromisoformat(item["created_at"])
+#             except (TypeError, ValueError):
+#                 continue
+#             if meeting_date < cutoff:
+#                 continue
+#         filtered_meetings.append(item)
+
+#     if not filtered_meetings:
+#         st.info("No meetings match these filters.")
+#     else:
+#         meeting_options = {
+#             f"#{item['id']} · {item['filename']} · {item['created_at']}": item["id"]
+#             for item in filtered_meetings
+#         }
+#         selected_label = st.selectbox("Select a meeting", list(meeting_options))
+#         selected_meeting = get_meeting(meeting_options[selected_label], owner_id=current_user_id)
+#         if selected_meeting:
+#             intelligence = selected_meeting["intelligence"]
+#             metric_cols = st.columns(4)
+#             metric_cols[0].metric("Transcript words", len(selected_meeting["transcript"].split()))
+#             metric_cols[1].metric("Action items", len(intelligence.get("action_items", [])))
+#             metric_cols[2].metric("Participants", len(intelligence.get("participants", [])))
+#             metric_cols[3].metric("Deadlines", len(intelligence.get("deadlines", [])))
+
+#             st.subheader(selected_meeting["filename"])
+#             st.caption(f"Meeting #{selected_meeting['id']} · {selected_meeting['created_at']}")
+#             st.markdown("#### Summary")
+#             st.write(intelligence.get("summary", "No summary available."))
+#             detail_col1, detail_col2 = st.columns(2)
+#             with detail_col1:
+#                 st.markdown("#### Key Decisions")
+#                 st.write("\n".join(f"- {item}" for item in intelligence.get("decisions", [])) or "No decisions recorded.")
+#                 st.markdown("#### Action Items")
+#                 actions = intelligence.get("action_items", [])
+#                 if actions:
+#                     st.dataframe(actions, use_container_width=True, hide_index=True)
+#                 else:
+#                     st.write("No action items recorded.")
+#                 st.markdown("#### Deadlines")
+#                 deadlines = intelligence.get("deadlines", [])
+#                 if deadlines:
+#                     st.dataframe(deadlines, use_container_width=True, hide_index=True)
+#                 else:
+#                     st.write("No deadlines recorded.")
+#             with detail_col2:
+#                 st.markdown("#### Participants & Responsibilities")
+#                 participants = intelligence.get("participants", [])
+#                 if participants:
+#                     st.dataframe(participants, use_container_width=True, hide_index=True)
+#                 else:
+#                     st.write("No participants recorded.")
+#                 st.markdown("#### Transcript")
+#                 st.text_area(
+#                     "Selected meeting transcript",
+#                     value=selected_meeting["transcript"],
+#                     height=260,
+#                     disabled=True,
+#                     key=f"meeting_transcript_{selected_meeting['id']}",
+#                 )
+
+#             export_col1, export_col2 = st.columns(2)
+#             with export_col1:
+#                 st.download_button(
+#                     "Download selected meeting CSV",
+#                     data=build_meeting_csv(selected_meeting),
+#                     file_name=f"meeting_{selected_meeting['id']}_report.csv",
+#                     mime="text/csv",
+#                     key=f"meeting_csv_{selected_meeting['id']}",
+#                 )
+#             with export_col2:
+#                 st.download_button(
+#                     "Download selected meeting PDF",
+#                     data=build_meeting_pdf(selected_meeting),
+#                     file_name=f"meeting_{selected_meeting['id']}_report.pdf",
+#                     mime="application/pdf",
+#                     key=f"meeting_pdf_{selected_meeting['id']}",
+#                 )
+
+# st.divider()
+# st.header("AI Meeting Assistant")
+# assistant_question = st.text_input(
+#     "Ask a question across your saved meetings",
+#     placeholder="What deadline was decided for the mobile application?",
+#     key="library_rag_question",
+# )
+# if assistant_question and st.button("Search and answer", key="library_rag_submit"):
+#     assistant_result = answer_question(assistant_question, owner_id=current_user_id)
+#     st.markdown("#### Answer")
+#     st.write(assistant_result["answer"])
+#     if assistant_result["sources"]:
+#         st.markdown("#### Retrieved sources and context")
+#         for source in assistant_result["sources"]:
+#             st.markdown(
+#                 f"**{source['filename']}** · {source['created_at']} · {source['section_type']} · "
+#                 f"meeting #{source['meeting_id']} · score {source['score']:.2f}"
+#             )
+#             st.write(source["content"])
+#     else:
+#         st.info("No stored meeting context matched that question.")
+
+# assistant_search = st.text_input(
+#     "Search meeting records",
+#     placeholder="Which meeting discussed the database migration?",
+#     key="library_search_query",
+# )
+# if assistant_search:
+#     search_results = semantic_search(assistant_search, owner_id=current_user_id)
+#     if search_results:
+#         for result in search_results:
+#             st.markdown(
+#                 f"**{result['filename']}** · {result['created_at']} · {result['section_type']} · "
+#                 f"meeting #{result['meeting_id']} · score {result['score']:.2f}"
+#             )
+#             st.write(result["content"])
+#     else:
+#         st.info("No matching meeting context was found.")
+
+# st.divider()
+# st.header("Recording Integrations")
+# if current_user_id is None:
+#     st.info("Sign in with an account to import recordings into a private meeting library.")
+# else:
+#     zoom_col, meet_col = st.columns(2)
+#     with zoom_col:
+#         if st.button("Sync Zoom recordings", use_container_width=True):
+#             try:
+#                 sync_result = sync_zoom_recordings(current_user_id, model_name=model_name)
+#                 st.success(f"Zoom sync: {sync_result['imported']} imported, {sync_result['duplicates']} already present, {sync_result['failed']} failed.")
+#                 for item in sync_result["results"]:
+#                     if item["status"] == "failed":
+#                         st.error(f"{item['filename']}: {item['error']}")
+#             except Exception as error:
+#                 st.error(f"Zoom sync could not run: {error}")
+#     with meet_col:
+#         if st.button("Sync Google Meet recordings", use_container_width=True):
+#             try:
+#                 sync_result = sync_google_meet_recordings(current_user_id, model_name=model_name)
+#                 st.success(f"Google Meet sync: {sync_result['imported']} imported, {sync_result['duplicates']} already present, {sync_result['failed']} failed.")
+#                 for item in sync_result["results"]:
+#                     if item["status"] == "failed":
+#                         st.error(f"{item['filename']}: {item['error']}")
+#             except Exception as error:
+#                 st.error(f"Google Meet sync could not run: {error}")
 import streamlit as st
 import whisper
 import os
@@ -5,11 +1128,13 @@ import json
 import hashlib
 from pathlib import Path
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+load_dotenv()
 import tempfile
 import csv
 import io
 from llm_service import process_transcript
-from meeting_db import get_meeting, init_db, save_meeting, recent_meetings
+from meeting_db import get_meeting, init_db, save_meeting, recent_meetings, meeting_analytics
 from knowledge_repository import answer_question, index_existing_meetings, init_knowledge_db, semantic_search, upsert_meeting_embeddings
 from meeting_reports import build_meeting_csv, build_meeting_pdf
 import auth_service
@@ -28,13 +1153,6 @@ def enforce_dashboard_access():
     auth_service.init_auth_db()
     token = st.session_state.get("auth_token")
     if token and (user_id := auth_service.resolve_session(token)) is not None:
-        with st.sidebar:
-            st.caption(auth_service.user_email(user_id))
-            if st.button("Log out"):
-                auth_service.revoke_session(token)
-                st.session_state.pop("auth_token", None)
-                st.session_state.pop("authenticated_user_id", None)
-                st.rerun()
         return user_id
     st.session_state.pop("auth_token", None)
     st.session_state.pop("authenticated_user_id", None)
@@ -73,160 +1191,347 @@ def enforce_dashboard_access():
 
 
 current_user_id = enforce_dashboard_access()
-
 st.markdown(
     """
     <style>
         :root {
-            --bg: #0f172a;
-            --panel: rgba(15, 23, 42, 0.88);
-            --panel-soft: rgba(15, 23, 42, 0.72);
-            --surface: #111827;
-            --surface-alt: #1f2937;
-            --border: rgba(148, 163, 184, 0.2);
-            --text: #e5eefb;
-            --muted: #a6b5c8;
-            --primary: #7dd3fc;
-            --primary-strong: #38bdf8;
-            --success: #34d399;
-            --warning: #fbbf24;
+            --bg: #f5f7f6;
+            --panel: #ffffff;
+            --surface: #ffffff;
+            --surface-alt: #eef4f1;
+            --border: #d9e4df;
+            --text: #1f2d28;
+            --muted: #667770;
+            --primary: #ee530b;
+            --primary-strong: #ee530b;
+            --primary-soft: #e3f0eb;
+            --success: #247454;
+            --warning: #9a6712;
         }
 
         .stApp {
-            background: linear-gradient(135deg, #0f172a 0%, #111827 30%, #172554 100%);
+            background: var(--bg);
             color: var(--text);
         }
 
         .main .block-container {
-            padding-top: 2rem;
-            padding-bottom: 2rem;
+            max-width: 1320px;
+            padding-top: 1.5rem;
+            padding-bottom: 2.5rem;
         }
 
+        /* Sidebar */
+        [data-testid="stSidebar"] {
+            background: #ffffff;
+            border-right: 1px solid var(--border);
+        }
+
+        [data-testid="stSidebar"] > div:first-child {
+            padding-top: 1.5rem;
+        }
+
+        .sidebar-brand {
+            padding: 0.25rem 0.35rem 1.25rem 0.35rem;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 1rem;
+        }
+
+        .sidebar-brand-title {
+            color: var(--text);
+            font-size: 1.15rem;
+            font-weight: 800;
+            margin: 0;
+        }
+
+        .sidebar-brand-subtitle {
+            color: var(--muted);
+            font-size: 0.78rem;
+            margin-top: 0.25rem;
+        }
+
+        [data-testid="stSidebar"] [data-testid="stRadio"] > label {
+            color: var(--muted);
+            font-size: 0.78rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        [data-testid="stSidebar"] [role="radiogroup"] {
+            gap: 0.35rem;
+        }
+
+        [data-testid="stSidebar"] [role="radiogroup"] label {
+            border-radius: 8px;
+            padding: 0.55rem 0.7rem;
+            transition: background 0.15s ease;
+        }
+
+        [data-testid="stSidebar"] [role="radiogroup"] label:hover {
+            background: var(--surface-alt);
+        }
+
+        [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
+            background: var(--primary-soft);
+            color: var(--primary);
+            font-weight: 700;
+        }
+
+        [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p {
+            color: var(--primary);
+            font-weight: 700;
+        }
+
+        .sidebar-footer {
+            color: var(--muted);
+            font-size: 0.75rem;
+            line-height: 1.5;
+            padding: 1rem 0.35rem 0;
+            border-top: 1px solid var(--border);
+            margin-top: 1.25rem;
+        }
+
+        /* Main header */
         .resume-hero {
-            background: rgba(15, 23, 42, 0.75);
+            background: var(--panel);
             border: 1px solid var(--border);
-            border-radius: 18px;
-            padding: 1.4rem 1.6rem;
-            margin-bottom: 1.2rem;
-            box-shadow: 0 12px 32px rgba(15, 23, 42, 0.25);
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(31, 45, 40, 0.04);
+            padding: 1rem 1.2rem;
+            margin-bottom: 1rem;
         }
 
         .resume-kicker {
             color: var(--primary);
             font-size: 0.78rem;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-            font-weight: 700;
-            margin-bottom: 0.45rem;
+            font-weight: 750;
+            letter-spacing: 0.04em;
+            margin-bottom: 0.25rem;
         }
 
         .resume-title {
-            font-size: clamp(2.1rem, 4vw, 3.1rem);
+            color: var(--text);
+            font-size: 1.7rem !important;
             font-weight: 800;
-            line-height: 1.1;
+            line-height: 1.2;
             margin: 0;
         }
 
         .resume-subtitle {
             color: var(--muted);
-            font-size: 1.02rem;
-            margin-top: 0.5rem;
+            font-size: 0.92rem;
+            margin-top: 0.35rem;
             margin-bottom: 0;
         }
 
         .mini-badge {
-            display: inline-block;
-            padding: 0.38rem 0.7rem;
-            border-radius: 999px;
-            background: rgba(125, 211, 252, 0.12);
-            border: 1px solid rgba(125, 211, 252, 0.35);
-            color: var(--primary);
-            font-size: 0.76rem;
-            font-weight: 700;
-            margin-right: 0.5rem;
-            margin-top: 0.6rem;
-        }
-
-        .section-card {
-            background: rgba(15, 23, 42, 0.82);
+            border-radius: 5px;
+            background: var(--surface-alt);
             border: 1px solid var(--border);
-            border-radius: 16px;
-            padding: 1rem 1.1rem;
-            margin: 0.6rem 0 1rem 0;
+            color: var(--primary);
         }
 
-        .section-label {
-            font-size: 1.1rem;
-            font-weight: 700;
-            margin-bottom: 0.5rem;
-            color: var(--text);
+        .section-card,
+        .metric-box {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 9px;
+            box-shadow: none;
         }
 
         .metric-box {
-            background: linear-gradient(180deg, rgba(17, 24, 39, 0.9), rgba(17, 24, 39, 0.75));
-            border: 1px solid var(--border);
-            border-radius: 14px;
-            padding: 0.9rem 0.8rem;
-            min-height: 110px;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
+            min-height: 98px;
         }
 
-        .stButton > button {
-            border-radius: 12px;
-            background: linear-gradient(135deg, #7dd3fc 0%, #38bdf8 100%);
-            color: #082f49;
-            border: none;
-            font-weight: 700;
-            padding: 0.65rem 1rem;
-            transition: transform 0.15s ease;
-        }
-
-        .stButton > button:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 10px 18px rgba(56, 189, 248, 0.25);
-        }
-
-        .stTabs [role="tablist"] {
-            gap: 0.5rem;
-        }
-
-        .stTabs [role="tab"] {
-            border-radius: 10px 10px 0 0;
-            background: rgba(15, 23, 42, 0.5);
-            border: 1px solid var(--border);
+        .dashboard-kicker {
             color: var(--muted);
-            padding: 0.5rem 1rem;
+            font-size: 0.82rem;
+            margin-top: -0.15rem;
         }
 
-        .stTabs [role="tab"][aria-selected="true"] {
-            background: rgba(56, 189, 248, 0.12);
-            border-color: rgba(56, 189, 248, 0.5);
-            color: var(--primary);
+        .dashboard-heading {
+            color: var(--text);
+            font-size: 1.55rem;
+            font-weight: 750;
+            margin: 0.3rem 0;
         }
 
-        .stDataFrame {
-            background: rgba(15, 23, 42, 0.65);
-            border-radius: 12px;
+        .dashboard-panel {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 9px;
+            padding: 1rem 1.1rem;
+            margin: 0.5rem 0 1rem;
+        }
+
+        .dashboard-panel-title {
+            color: var(--text);
+            font-size: 1rem;
+            font-weight: 700;
+            margin-bottom: 0.3rem;
+        }
+
+        /* Buttons */
+        .stButton > button {
+            border-radius: 7px;
+            background: var(--primary);
+            color: #ffffff;
+            border: 1px solid var(--primary);
+            font-weight: 650;
+            box-shadow: none;
+            transition: background 0.15s ease;
+        }
+        
+        .stButton > button:hover {
+            background: var(--primary-strong);
+            border-color: var(--primary-strong);
+            color: #ffffff;
+            transform: none;
+            box-shadow: none;
+        }
+        /* Login and Signup buttons */
+        /* Login and Signup buttons */
+        [data-testid="stFormSubmitButton"] button {
+            background-color: var(--primary) !important;
+            color: #ffffff !important;
+            border: 1px solid var(--primary) !important;
+            border-radius: 7px !important;
+            font-weight: 650 !important;
+        }
+
+        [data-testid="stFormSubmitButton"] button:hover {
+            background-color: var(--primary-strong) !important;
+            color: #ffffff !important;
+            border-color: var(--primary-strong) !important;
+        }
+        /* File Upload */
+        /* CSV and PDF Download buttons */
+        .stDownloadButton > button {
+            border-radius: 7px !important;
+            background: var(--primary) !important;
+            color: #ffffff !important;
+            border: 1px solid var(--primary) !important;
+            font-weight: 650;
+        }
+
+        .stDownloadButton > button:hover {
+            background: var(--primary-strong) !important;
+            border-color: var(--primary-strong) !important;
+            color: #ffffff !important;
+        }
+        [data-testid="stFileUploader"] button {
+            background: var(--primary) !important;
+            color: #ffffff !important;
+            border: 1px solid var(--primary) !important;
+            border-radius: 7px !important;
+        }
+
+        [data-testid="stFileUploader"] button:hover {
+            background: var(--primary-strong) !important;
+            border-color: var(--primary-strong) !important;
+            color: #ffffff !important;
+        }
+
+        [data-testid="stFileUploader"] section {
+            border-color: var(--border) !important;
+        }
+        /* =========================
+   Meeting Action Tabs
+   ========================= */
+
+        div[data-baseweb="tab-list"] {
+            display: flex !important;
+            gap: 12px !important;
+            padding: 8px !important;
+            margin: 18px 0 22px 0 !important;
+            background: var(--surface-alt) !important;
+            border: 1px solid var(--border) !important;
+            border-radius: 14px !important;
+        }
+
+        /* Individual tabs */
+        button[data-baseweb="tab"] {
+            flex: 1 !important;
+            min-height: 52px !important;
+            background: var(--panel) !important;
+            color: var(--text) !important;
+            border: 2px solid var(--border) !important;
+            border-radius: 10px !important;
+            padding: 10px 16px !important;
+            font-weight: 700 !important;
+            font-size: 0.92rem !important;
+            transition: all 0.2s ease !important;
+        }
+
+        /* Hover effect */
+        button[data-baseweb="tab"]:hover {
+            background: var(--primary-soft) !important;
+            color: var(--primary) !important;
+            border-color: var(--primary) !important;
+        }
+
+        /* Selected tab */
+        button[data-baseweb="tab"][aria-selected="true"] {
+            background: var(--primary-soft) !important;
+            color: var(--primary) !important;
+            border: 2px solid var(--primary) !important;
+            box-shadow: 0 3px 10px rgba(238, 83, 11, 0.12) !important;
+        }
+
+        /* Remove Streamlit default underline */
+        div[data-baseweb="tab-highlight"] {
+            display: none !important;
+        }
+        # /* Tabs */
+        # .stTabs [role="tablist"] {
+        #     gap: 0.25rem;
+        #     border-bottom: 1px solid var(--border);
+        # }
+
+        # .stTabs [role="tab"] {
+        #     border-radius: 6px 6px 0 0;
+        #     background: transparent;
+        #     border: 0;
+        #     color: var(--muted);
+        # }
+
+        # .stTabs [role="tab"][aria-selected="true"] {
+        #     background: var(--panel);
+        #     color: var(--primary);
+        #     border-bottom: 2px solid var(--primary);
+        # }
+
+        # .stDataFrame {
+        #     background: var(--panel);
+        #     border: 1px solid var(--border);
+        #     border-radius: 8px;
+        # }
+
+        /* Inputs */
+        div[data-baseweb="input"] > div,
+        div[data-baseweb="select"] > div,
+        textarea {
+            border-color: var(--border);
+        }
+
+        @media (max-width: 700px) {
+            .main .block-container {
+                padding-left: 1rem;
+                padding-right: 1rem;
+            }
         }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
+
 st.markdown(
     """
     <div class="resume-hero">
-        <div class="resume-kicker">AI-powered meeting intelligence</div>
-        <h1 class="resume-title">🎙️ Meeting Transcription System</h1>
-        <p class="resume-subtitle">Upload a meeting recording, extract actionable insights, validate transcript accuracy, and search across saved meetings using natural language.</p>
-        <div>
-            <span class="mini-badge">Whisper</span>
-            <span class="mini-badge">Semantic Search</span>
-            <span class="mini-badge">Meeting Insights</span>
-            <span class="mini-badge">SQLite Storage</span>
-        </div>
+        <div class="resume-kicker">CAREER INTELLIGENCE</div>
+        <h1 class="resume-title">Meeting intelligence</h1>
+        <p class="resume-subtitle">Transcripts, decisions, actions, and deadlines in one private workspace.</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -239,6 +1544,114 @@ os.makedirs("cache", exist_ok=True)
 init_db()
 init_knowledge_db()
 index_existing_meetings()
+
+st.session_state.setdefault("dashboard_view", "home")
+
+navigation_labels = {
+    "home": "🏠  Home",
+    "workspace": "▦  Workspace",
+    "profile": "👤  Profile",
+}
+navigation_views = {label: view for view, label in navigation_labels.items()}
+navigation_options = list(navigation_views)
+navigation_index = list(navigation_labels).index(st.session_state["dashboard_view"])
+
+# ==================== SIDEBAR NAVIGATION ====================
+with st.sidebar:
+    st.markdown(
+        """
+        <div class="sidebar-brand">
+            <div class="sidebar-brand-title">🎙️ Meeting Intelligence</div>
+            <div class="sidebar-brand-subtitle">Private AI meeting workspace</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    selected_navigation = st.radio(
+        "Navigation",
+        navigation_options,
+        index=navigation_index,
+        key="dashboard_navigation",
+    )
+
+    st.markdown(
+        """
+        <div class="sidebar-footer">
+            <b>AI Meeting Assistant</b><br>
+            Transcripts · Decisions · Actions · Deadlines
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+dashboard_view = navigation_views.get(selected_navigation, "home")
+st.session_state["dashboard_view"] = dashboard_view
+
+if dashboard_view == "home":
+    analytics = meeting_analytics(current_user_id)
+    account_email = auth_service.user_email(current_user_id) or "Account"
+    st.markdown('<div class="dashboard-heading">Overview</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="dashboard-kicker">Your private meeting workspace · {account_email}</div>', unsafe_allow_html=True)
+
+    metric_columns = st.columns(4)
+    metric_columns[0].metric("Meetings", analytics["meetings"])
+    metric_columns[1].metric("Action items", analytics["action_items"])
+    metric_columns[2].metric("Deadlines", analytics["deadlines"])
+    metric_columns[3].metric("People identified", analytics["participants"])
+
+    words_col, trend_col = st.columns([1, 2.2])
+    with words_col:
+        st.metric("Transcript words", f"{analytics['transcript_words']:,}")
+        st.caption("Across your saved meetings")
+    with trend_col:
+        st.markdown('<div class="dashboard-panel-title">Meetings · last 8 weeks</div>', unsafe_allow_html=True)
+        if analytics["meetings"]:
+            weekly_activity = analytics["weekly_activity"]
+            st.bar_chart(
+                {"Week": list(weekly_activity), "Meetings": list(weekly_activity.values())},
+                x="Week",
+                y="Meetings",
+                height=205,
+                color="#ee530b",
+            )
+        else:
+            st.info("Meeting activity will appear here after your first recording is processed.")
+
+    st.markdown('<div class="dashboard-panel-title">Recent meetings</div>', unsafe_allow_html=True)
+    latest_meetings = recent_meetings(limit=5, owner_id=current_user_id)
+    if latest_meetings:
+        for meeting in latest_meetings:
+            meeting_col, summary_col, date_col = st.columns([1.2, 2.3, 1.2])
+            with meeting_col:
+                st.write(meeting["filename"])
+            with summary_col:
+                st.caption(meeting["intelligence"].get("summary", "No summary available."))
+            with date_col:
+                st.caption(meeting["created_at"])
+            st.divider()
+    else:
+        st.info("No meetings yet. Open Workspace to upload a recording or sync a provider.")
+
+    st.stop()
+
+if dashboard_view == "profile":
+    account_email = auth_service.user_email(current_user_id) or "Unknown account"
+    st.markdown('<div class="dashboard-heading">Profile</div>', unsafe_allow_html=True)
+    st.markdown('<div class="dashboard-kicker">Account and session</div>', unsafe_allow_html=True)
+    with st.container():
+        st.markdown('<div class="dashboard-panel-title">Signed-in account</div>', unsafe_allow_html=True)
+        st.write(account_email)
+        st.caption("Meeting records, searches, and provider imports are scoped to this account.")
+    if st.button("Log out", key="profile_logout"):
+        auth_token = st.session_state.get("auth_token")
+        auth_service.revoke_session(auth_token)
+        st.session_state.clear()
+        st.rerun()
+    st.stop()
+
+st.markdown('<div class="dashboard-heading">Workspace</div>', unsafe_allow_html=True)
+st.markdown('<div class="dashboard-kicker">Upload, search, review, and sync meeting recordings.</div>', unsafe_allow_html=True)
 
 # ==================== CACHING SYSTEM (Avoid Re-transcription) ====================
 def get_file_hash(file_bytes):
@@ -602,10 +2015,15 @@ if uploaded_file is not None:
                     col_download1, col_download2 = st.columns(2)
                     with col_download1:
                         st.download_button(
-                            label="📥 Download Transcript (TXT)",
-                            data=transcript_text,
-                            file_name=f"transcript_{timestamp}.txt",
-                            mime="text/plain",
+                            label="📥 Download Transcript (PDF)",
+                            data=build_meeting_pdf({
+                                "filename": f"transcript_{timestamp}.txt",
+                                "created_at": timestamp,
+                                "transcript": transcript_text,
+                                "intelligence": intelligence,
+                            }),
+                            file_name=f"transcript_{timestamp}.pdf",
+                            mime="application/pdf",
                             use_container_width=True,
                         )
                     with col_download2:
@@ -690,9 +2108,14 @@ if uploaded_file is not None:
                             with open(transcript_file, 'r') as f:
                                 transcript_text = f.read()
                             st.download_button(
-                                "📥 Download",
-                                data=transcript_text,
-                                file_name=os.path.basename(transcript_file),
+                                "📥 Download PDF",
+                                data=build_meeting_pdf({
+                                    "filename": metadata.get("original_file", os.path.basename(transcript_file)),
+                                    "created_at": metadata.get("transcription_date", ""),
+                                    "transcript": transcript_text,
+                                }),
+                                file_name=f"{Path(transcript_file).stem}.pdf",
+                                mime="application/pdf",
                                 key=str(metadata_file)
                             )
             else:
@@ -772,7 +2195,11 @@ if uploaded_file is not None:
                 results = semantic_search(search_query, owner_id=current_user_id)
                 if results:
                     for result in results:
-                        st.markdown(f"**{result['filename']}** · {result['section_type']} · {result['score']:.2f}")
+                        st.markdown(
+                            f"**Meeting #{result['meeting_id']}: {result['filename']}** · "
+                            f"{result['created_at']} · {result['section_type']} · "
+                            f"relevance {result['score']:.2f}"
+                        )
                         st.write(result["content"])
                 else:
                     st.info("No matching meeting information found.")
@@ -788,7 +2215,11 @@ if uploaded_file is not None:
                 st.write(rag_result["answer"])
                 st.caption("Sources used")
                 for source in rag_result["sources"]:
-                    st.write(f"- {source['filename']} ({source['section_type']})")
+                    st.caption(
+                        f"Meeting #{source['meeting_id']}: {source['filename']} · "
+                        f"{source['created_at']} · {source['section_type']} · "
+                        f"relevance {source['score']:.2f}"
+                    )
 
 
 st.divider()

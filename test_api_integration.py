@@ -57,6 +57,12 @@ class ApiIntegrationTests(unittest.TestCase):
         ask_response = self.client.post("/ask", json={"question": "Which meeting discussed database migration?"})
         self.assertEqual(ask_response.status_code, 200)
         self.assertIn("migration", ask_response.json()["answer"].lower())
+        source = ask_response.json()["sources"][0]
+        self.assertEqual(source["meeting_id"], meeting_id)
+        self.assertEqual(source["filename"], "migration.mp3")
+        self.assertIn("created_at", source)
+        self.assertIn("section_type", source)
+        self.assertIn("score", source)
 
     def test_empty_question_is_rejected_cleanly(self):
         response = self.client.post("/ask", json={"question": "   "})

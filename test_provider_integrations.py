@@ -6,16 +6,19 @@ from unittest.mock import patch
 import knowledge_repository
 import meeting_db
 import provider_integrations
+import requests
 
 
 class FakeResponse:
-    def __init__(self, payload=None, content=b"meeting audio bytes"):
+    def __init__(self, payload=None, content=b"meeting audio bytes", status_code=200):
         self.payload = payload or {}
         self.content = content
+        self.status_code = status_code
         self.headers = {"Content-Length": str(len(content))}
 
     def raise_for_status(self):
-        return None
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"HTTP {self.status_code}", response=self)
 
     def json(self):
         return self.payload
@@ -90,6 +93,25 @@ class ProviderIntegrationTests(unittest.TestCase):
         self.assertEqual(result["imported"], 1)
         self.assertEqual(len(meeting_db.recent_meetings(owner_id=11)), 1)
         self.assertEqual(meeting_db.recent_meetings(owner_id=11)[0]["filename"], "Team meeting.mp4")
+
+    def test_google_token_error_includes_safe_provider_diagnostic(self):
+        credentials = {
+            "GOOGLE_CLIENT_ID": "client",
+            "GOOGLE_CLIENT_SECRET": "secret",
+            "GOOGLE_REFRESH_TOKEN": "refresh",
+            "GOOGLE_MEET_RECORDINGS_FOLDER_ID": "meet-recordings-folder",
+        }
+        token_error = FakeResponse(
+            {"error": "invalid_client", "error_description": "Client authentication failed."},
+            status_code=401,
+        )
+        with patch.dict("os.environ", credentials):
+            with patch.object(provider_integrations.requests, "post", return_value=token_error):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "Google OAuth token exchange failed: invalid_client: Client authentication failed\\.",
+                ):
+                    provider_integrations.sync_google_meet_recordings(owner_id=11)
 
     def test_untrusted_download_hosts_are_rejected(self):
         with self.assertRaises(ValueError):
